@@ -15,7 +15,6 @@ import (
 	"github.com/gin-gonic/gin"
 
 	qdrantclient "github.com/onchain-consent/backend/go-api/internal/qdrant"
-	redisclient "github.com/onchain-consent/backend/go-api/internal/redis"
 )
 
 func (h *Handler) CreateConsent(c *gin.Context) {
