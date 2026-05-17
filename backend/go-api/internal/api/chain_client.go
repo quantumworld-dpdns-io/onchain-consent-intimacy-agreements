@@ -179,8 +179,6 @@ func (m *ChainManager) SubmitTransaction(ctx context.Context, chain string, to c
 		return common.Hash{}, fmt.Errorf("failed to estimate gas: %w", err)
 	}
 
-	signer := types.LatestSignerForChainID(chainID)
-
 	gasFeeCap := new(big.Int).Mul(gasPrice, big.NewInt(2))
 	gasTipCap := gasPrice
 
