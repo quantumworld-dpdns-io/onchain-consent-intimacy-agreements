@@ -11,7 +11,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
-	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/onchain-consent/backend/event-indexer/internal/config"
 )
@@ -71,10 +70,39 @@ func (c *Client) authContext(ctx context.Context) context.Context {
 	return ctx
 }
 
+func stringValue(s string) *pb.Value {
+	return &pb.Value{ValueOneOf: &pb.Value_StringValue{StringValue: s}}
+}
+
+func boolValue(b bool) *pb.Value {
+	return &pb.Value{ValueOneOf: &pb.Value_BoolValue{BoolValue: b}}
+}
+
+func stringListValue(items []string) *pb.Value {
+	vals := make([]*pb.Value, len(items))
+	for i, item := range items {
+		vals[i] = stringValue(item)
+	}
+	return &pb.Value{ValueOneOf: &pb.Value_ListValue{ListValue: &pb.ListValue{Values: vals}}}
+}
+
+func makePayload(doc *ConsentDocument) map[string]*pb.Value {
+	return map[string]*pb.Value{
+		"consent_id":  stringValue(doc.ConsentID),
+		"parties":     stringListValue(doc.Parties),
+		"scopes":      stringListValue(doc.Scopes),
+		"valid_from":  stringValue(fmt.Sprintf("%d", doc.ValidFrom)),
+		"valid_until": stringValue(fmt.Sprintf("%d", doc.ValidUntil)),
+		"revoked":     boolValue(doc.Revoked),
+		"chain":       stringValue(doc.Chain),
+		"tx_hash":     stringValue(doc.TxHash),
+		"created_at":  stringValue(fmt.Sprintf("%d", doc.CreatedAt)),
+	}
+}
+
 func (c *Client) UpdateConsentRevoked(ctx context.Context, consentID string, revoked bool) error {
 	ctx = c.authContext(ctx)
 
-	filterVal := structpb.NewStringValue(consentID)
 	filter := &pb.Filter{
 		Must: []*pb.Condition{
 			{
@@ -82,9 +110,7 @@ func (c *Client) UpdateConsentRevoked(ctx context.Context, consentID string, rev
 					Field: &pb.FieldCondition{
 						Key: "consent_id",
 						Match: &pb.Match{
-							MatchValue: &pb.Match_Text{
-								Text: filterVal.GetStringValue(),
-							},
+							MatchValue: &pb.Match_Text{Text: consentID},
 						},
 					},
 				},
@@ -92,21 +118,19 @@ func (c *Client) UpdateConsentRevoked(ctx context.Context, consentID string, rev
 		},
 	}
 
+	limit := uint32(100)
 	scrollResp, err := c.points.Scroll(ctx, &pb.ScrollPoints{
 		CollectionName: c.config.CollectionName,
 		Filter:         filter,
-		Limit:          100,
+		Limit:          &limit,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to scroll points: %w", err)
 	}
 
 	for _, p := range scrollResp.GetResult() {
-		payload, err := structpb.NewStruct(map[string]interface{}{
-			"revoked": revoked,
-		})
-		if err != nil {
-			return fmt.Errorf("failed to create payload: %w", err)
+		payload := map[string]*pb.Value{
+			"revoked": boolValue(revoked),
 		}
 
 		_, err = c.points.SetPayload(ctx, &pb.SetPayloadPoints{
@@ -125,26 +149,10 @@ func (c *Client) UpdateConsentRevoked(ctx context.Context, consentID string, rev
 func (c *Client) IndexConsent(ctx context.Context, doc *ConsentDocument) error {
 	ctx = c.authContext(ctx)
 
-	payloadMap := map[string]interface{}{
-		"consent_id":  doc.ConsentID,
-		"parties":     doc.Parties,
-		"scopes":      doc.Scopes,
-		"valid_from":  fmt.Sprintf("%d", doc.ValidFrom),
-		"valid_until": fmt.Sprintf("%d", doc.ValidUntil),
-		"revoked":     doc.Revoked,
-		"chain":       doc.Chain,
-		"tx_hash":     doc.TxHash,
-		"created_at":  fmt.Sprintf("%d", doc.CreatedAt),
-	}
-
-	payload, err := structpb.NewStruct(payloadMap)
-	if err != nil {
-		return fmt.Errorf("failed to create payload struct: %w", err)
-	}
-
+	payload := makePayload(doc)
 	pointID := uuid.New().String()
 
-	_, err = c.points.Upsert(ctx, &pb.UpsertPoints{
+	_, err := c.points.Upsert(ctx, &pb.UpsertPoints{
 		CollectionName: c.config.CollectionName,
 		Points: []*pb.PointStruct{
 			{

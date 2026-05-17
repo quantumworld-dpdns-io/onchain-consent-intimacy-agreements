@@ -9,4 +9,5 @@ require (
 	github.com/redis/go-redis/v9 v9.5.1
 	github.com/rs/zerolog v1.32.0
 	google.golang.org/grpc v1.62.1
+	google.golang.org/protobuf v1.32.0
 )
