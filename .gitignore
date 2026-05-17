@@ -22,3 +22,46 @@ vendor/
 .env
 .env.*
 !.env.example
+
+# Foundry
+out/
+broadcast/
+forge-cache/
+cache_forge/
+
+# Hardhat
+cache/
+artifacts/
+typechain-types/
+
+# Noir
+circuits/**/target/
+Prover.toml
+Verifier.toml
+
+# Rust / Cargo
+**/target/
+**/Cargo.lock
+
+# Go
+**/vendor/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Qdrant
+qdrant_storage/
+
+# Coverage
+coverage/
+lcov.info
+coverage.json
+
+# Reports
+*.html
+*.xml
+slither-report.json
+mythril-report.json
