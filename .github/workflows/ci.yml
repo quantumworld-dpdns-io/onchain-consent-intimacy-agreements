@@ -2,14 +2,373 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FOUNDRY_PROFILE: ci
+  SEPOLIA_RPC_URL: ${{ secrets.SEPOLIA_RPC_URL }}
+  BSC_TESTNET_RPC_URL: ${{ secrets.BSC_TESTNET_RPC_URL }}
+  AMOY_RPC_URL: ${{ secrets.AMOY_RPC_URL }}
+  PALM_TESTNET_RPC_URL: ${{ secrets.PALM_TESTNET_RPC_URL }}
+  BASE_SEPOLIA_RPC_URL: ${{ secrets.BASE_SEPOLIA_RPC_URL }}
+
 jobs:
-  build:
+  lint:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        lang: [solidity, typescript, go, rust, python]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Solhint (Solidity lint)
+        if: matrix.lang == 'solidity'
+        run: |
+          npm install -g solhint
+          solhint 'src/**/*.sol'
+
+      - name: ESLint (TypeScript)
+        if: matrix.lang == 'typescript'
+        run: |
+          npm ci
+          npx prettier --check 'src/**/*.sol' 'tests/**/*.ts'
+
+      - name: golangci-lint (Go)
+        if: matrix.lang == 'go'
+        run: |
+          cd backend/go-api
+          go vet ./...
+
+      - name: Clippy (Rust)
+        if: matrix.lang == 'rust'
+        run: |
+          cd circuits/rust-zk-service
+          cargo clippy -- -D warnings
+
+      - name: Ruff (Python)
+        if: matrix.lang == 'python'
+        run: |
+          pip install ruff
+          ruff check tests/robot/
+
+  compile:
+    needs: lint
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        framework: [foundry, hardhat]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Foundry
+        if: matrix.framework == 'foundry'
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Foundry Build
+        if: matrix.framework == 'foundry'
+        run: forge build --sizes
+
+      - name: Hardhat Build
+        if: matrix.framework == 'hardhat'
+        run: |
+          npm ci
+          npx hardhat compile
+
+      - name: Cache artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            out/
+            artifacts/
+            cache/
+          key: ${{ runner.os }}-${{ matrix.framework }}-${{ hashFiles('src/**/*.sol') }}
+
+  forge-test:
+    needs: compile
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Placeholder build step
-        run: echo "Add your build/test commands here"
+      - uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Run Forge Tests
+        run: forge test -vvv --gas-report
+
+      - name: Generate coverage
+        run: forge coverage --report lcov
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          files: lcov.info
+
+  hardhat-test:
+    needs: compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Hardhat Tests
+        run: npx hardhat test tests/hardhat/
+
+      - name: Gas report
+        run: npx hardhat test --gas
+
+  solana-test:
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Install Solana CLI
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v1.18.0/install)"
+          echo "/home/runner/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+
+      - name: Build Anchor programs
+        run: |
+          cd solana-programs
+          anchor build
+
+      - name: Run Solana tests
+        run: |
+          cd solana-programs
+          anchor test --skip-deploy
+
+  noir-test:
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Noir
+        run: |
+          curl -L https://raw.githubusercontent.com/noir-lang/noirup/main/install | bash
+          noirup
+
+      - name: Build and test Noir circuits
+        run: |
+          cd circuits/noir
+          nargo test --workspace
+          nargo info --workspace
+
+  risc-zero-test:
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Build RISC Zero programs
+        run: |
+          for dir in circuits/risc-zero/*/; do
+            cd "$dir"
+            cargo build --release
+            cd -
+          done
+
+  go-test:
+    needs: lint
+    runs-on: ubuntu-latest
+    services:
+      qdrant:
+        image: qdrant/qdrant
+        ports:
+          - 6333:6333
+      redis:
+        image: redis
+        ports:
+          - 6379:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Go tests
+        run: |
+          cd backend/go-api
+          go test ./... -v -race -coverprofile=coverage.out
+
+      - name: Upload Go coverage
+        uses: codecov/codecov-action@v4
+        with:
+          files: backend/go-api/coverage.out
+
+  slither:
+    needs: compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Slither
+        run: pip install slither-analyzer
+
+      - name: Run Slither
+        run: |
+          slither src/ --checklist --json slither-report.json
+
+      - name: Upload Slither report
+        uses: actions/upload-artifact@v4
+        with:
+          name: slither-report
+          path: slither-report.json
+
+  mythril:
+    needs: compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Mythril
+        run: pip install mythril
+
+      - name: Run Mythril
+        run: |
+          myth analyze src/contracts/ConsentRegistry.sol --solc-json mythril-config.json --execution-timeout 300
+
+  echidna-fuzz:
+    needs: compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Echidna fuzzer
+        run: |
+          echidna-test tests/fuzz/ --config tests/fuzz/consent-properties.yaml
+
+  robot-security:
+    needs: [forge-test, go-test]
+    runs-on: ubuntu-latest
+    services:
+      anvil:
+        image: ghcr.io/foundry-rs/foundry
+        ports:
+          - 8545:8545
+      qdrant:
+        image: qdrant/qdrant
+        ports:
+          - 6333:6333
+      redis:
+        image: redis
+        ports:
+          - 6379:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Install Python deps
+        run: pip install -r requirements.txt
+
+      - name: Start Go API server
+        run: |
+          cd backend/go-api
+          go run ./cmd/server &
+          sleep 5
+
+      - name: Deploy contracts to Anvil
+        run: |
+          forge script scripts/deploy/anvil.s.sol --broadcast --rpc-url http://localhost:8545
+
+      - name: Run OWASP Robot tests
+        run: |
+          pabot --processes 4 --outputdir results/owasp tests/robot/owasp/
+
+      - name: Run API Robot tests
+        run: |
+          robot --outputdir results/api tests/robot/api/
+
+      - name: Generate combined Robot report
+        run: rebot --outputdir results/all --name "Consent Security Tests" results/**/output.xml
+
+      - name: Upload Robot report
+        uses: actions/upload-artifact@v4
+        with:
+          name: robot-security-report
+          path: results/all/
+
+  zap-scan:
+    needs: [go-test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start services
+        run: |
+          cd backend/go-api
+          go run ./cmd/server &
+          sleep 3
+
+      - name: OWASP ZAP API Scan
+        uses: zaproxy/action-api-scan@v0.7.0
+        with:
+          target: 'http://localhost:8080/openapi.json'
+          allow_autocreate: false
+          fail_on_high: true
+
+      - name: Upload ZAP report
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-report
+          path: zap_*.html
+
+  qdrant-test:
+    needs: [go-test]
+    runs-on: ubuntu-latest
+    services:
+      qdrant:
+        image: qdrant/qdrant
+        ports:
+          - 6333:6333
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run Qdrant tests
+        run: |
+          pip install qdrant-client
+          python tests/qdrant/test_vector_index.py

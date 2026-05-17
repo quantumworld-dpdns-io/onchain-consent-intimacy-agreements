@@ -1,0 +1,54 @@
+name: Security Scan
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+jobs:
+  slither-full:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install slither-analyzer
+      - run: slither src/ --checklist --fail-high --json slither-full.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: slither-full
+          path: slither-full.json
+
+  mythril-full:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install mythril
+      - run: |
+          for f in src/contracts/*.sol; do
+            myth analyze "$f" --execution-timeout 600
+          done
+
+  dependabot-review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          npm audit --json || true
+          cd solana-programs && npm audit --json || true
+
+  notify:
+    needs: [slither-full, mythril-full, dependabot-review]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload:
+            status: ${{ job.status }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
