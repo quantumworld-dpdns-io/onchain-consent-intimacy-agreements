@@ -2,7 +2,6 @@ package contracts
 
 import (
 	"context"
-	"crypto/ecdsa"
 	"fmt"
 	"math/big"
 	"strings"
@@ -22,13 +21,6 @@ const (
 	DefaultGasLimit = 300000
 	TxTimeout       = 2 * time.Minute
 )
-
-type ConsentContract interface {
-	RegisterConsent(ctx context.Context, parties []common.Address, scopes [][32]byte, duration *big.Int, privateKey *ecdsa.PrivateKey) (common.Hash, error)
-	GetConsent(ctx context.Context, consentID [32]byte) (*ConsentData, error)
-	RevokeConsent(ctx context.Context, consentID [32]byte, privateKey *ecdsa.PrivateKey) (common.Hash, error)
-	ConsentExists(ctx context.Context, consentID [32]byte) (bool, error)
-}
 
 type ConsentData struct {
 	Parties    []common.Address
