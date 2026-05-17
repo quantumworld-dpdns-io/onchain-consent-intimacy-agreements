@@ -192,7 +192,13 @@ func (c *Client) UpdateConsentRevoked(ctx context.Context, consentID string, rev
 		_, err = c.points.SetPayload(ctx, &pb.SetPayloadPoints{
 			CollectionName: c.config.CollectionName,
 			Payload:        payload,
-			Points:         []*pb.PointId{p.GetId()},
+			PointsSelector: &pb.PointsSelector{
+				PointsSelectorOneOf: &pb.PointsSelector_Points{
+					Points: &pb.PointsIdsList{
+						Ids: []*pb.PointId{p.GetId()},
+					},
+				},
+			},
 		})
 		if err != nil {
 			return fmt.Errorf("failed to update consent payload: %w", err)

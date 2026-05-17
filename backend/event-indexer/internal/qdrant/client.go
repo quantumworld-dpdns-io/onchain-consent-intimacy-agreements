@@ -71,11 +71,11 @@ func (c *Client) authContext(ctx context.Context) context.Context {
 }
 
 func stringValue(s string) *pb.Value {
-	return &pb.Value{ValueOneOf: &pb.Value_StringValue{StringValue: s}}
+	return &pb.Value{Kind: &pb.Value_StringValue{StringValue: s}}
 }
 
 func boolValue(b bool) *pb.Value {
-	return &pb.Value{ValueOneOf: &pb.Value_BoolValue{BoolValue: b}}
+	return &pb.Value{Kind: &pb.Value_BoolValue{BoolValue: b}}
 }
 
 func stringListValue(items []string) *pb.Value {
@@ -83,7 +83,7 @@ func stringListValue(items []string) *pb.Value {
 	for i, item := range items {
 		vals[i] = stringValue(item)
 	}
-	return &pb.Value{ValueOneOf: &pb.Value_ListValue{ListValue: &pb.ListValue{Values: vals}}}
+	return &pb.Value{Kind: &pb.Value_ListValue{ListValue: &pb.ListValue{Values: vals}}}
 }
 
 func makePayload(doc *ConsentDocument) map[string]*pb.Value {
@@ -136,7 +136,13 @@ func (c *Client) UpdateConsentRevoked(ctx context.Context, consentID string, rev
 		_, err = c.points.SetPayload(ctx, &pb.SetPayloadPoints{
 			CollectionName: c.config.CollectionName,
 			Payload:        payload,
-			Points:         []*pb.PointId{p.GetId()},
+			PointsSelector: &pb.PointsSelector{
+				PointsSelectorOneOf: &pb.PointsSelector_Points{
+					Points: &pb.PointsIdsList{
+						Ids: []*pb.PointId{p.GetId()},
+					},
+				},
+			},
 		})
 		if err != nil {
 			return fmt.Errorf("failed to update consent payload: %w", err)
