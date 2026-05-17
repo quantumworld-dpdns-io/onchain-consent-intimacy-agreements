@@ -1,0 +1,93 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+  external_labels:
+    cluster: "consent-agreements"
+
+rule_files:
+  - "alerts.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+
+scrape_configs:
+  - job_name: "go-api"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["go-api:8080"]
+        labels:
+          service: "consent-api"
+          tier: "backend"
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: "go-api"
+
+  - job_name: "rust-zk-service"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["rust-zk-service:3000"]
+        labels:
+          service: "zk-proof-service"
+          tier: "backend"
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: "rust-zk-service"
+
+  - job_name: "anvil"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["anvil:8545"]
+        labels:
+          service: "ethereum-node"
+          chain: "local"
+          tier: "blockchain"
+
+  - job_name: "solana"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["solana-test-validator:8899"]
+        labels:
+          service: "solana-node"
+          chain: "local"
+          tier: "blockchain"
+
+  - job_name: "qdrant"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["qdrant:6333"]
+        labels:
+          service: "vector-db"
+          tier: "storage"
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: "qdrant_(collections|points|operations)_.*"
+        action: keep
+
+  - job_name: "redis"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["redis:6379"]
+        labels:
+          service: "cache"
+          tier: "storage"
+
+  - job_name: "postgres"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["postgres:5432"]
+        labels:
+          service: "database"
+          tier: "storage"
+
+  - job_name: "nginx"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["nginx:80"]
+        labels:
+          service: "reverse-proxy"
+          tier: "infra"

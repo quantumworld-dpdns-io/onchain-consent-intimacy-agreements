@@ -1,0 +1,36 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["node_modules", "lib"]
+test = "tests/solidity"
+cache = true
+evm_version = "paris"
+solc = "0.8.27"
+
+[profile.default.fmt]
+indent = 2
+line_length = 120
+
+[fmt]
+bracket_spacing = true
+int_types = "long"
+line_length = 120
+number_underscore = "thousands"
+quote_style = "double"
+tab_width = 4
+wrap_comments = true
+
+[rpc_endpoints]
+sepolia = "${SEPOLIA_RPC_URL}"
+bsc_testnet = "${BSC_TESTNET_RPC_URL}"
+amoy = "${AMOY_RPC_URL}"
+palm_testnet = "${PALM_TESTNET_RPC_URL}"
+base_sepolia = "${BASE_SEPOLIA_RPC_URL}"
+anvil = "http://127.0.0.1:8545"
+
+[etherscan]
+sepolia = { key = "${ETHERSCAN_API_KEY}" }
+bsc_testnet = { key = "${BSCSCAN_API_KEY}" }
+amoy = { key = "${POLYGONSCAN_API_KEY}" }
+palm_testnet = { key = "${PALMSCAN_API_KEY}" }
+base_sepolia = { key = "${BASESCAN_API_KEY}" }
