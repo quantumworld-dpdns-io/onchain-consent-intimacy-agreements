@@ -302,7 +302,7 @@ func (h *Handler) RevokeConsent(c *gin.Context) {
 	}
 
 	consentHash := common.HexToHash(req.ConsentID)
-	txHash, txHashStr, err := contractCli.RevokeConsent(c.Request.Context(), consentHash)
+	_, txHashStr, err := contractCli.RevokeConsent(c.Request.Context(), consentHash)
 	if err != nil {
 		if !strings.Contains(err.Error(), "requires external signing") {
 			h.handleError(c, http.StatusInternalServerError, "failed to revoke consent on chain", err)
