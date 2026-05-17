@@ -11,7 +11,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
-	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/onchain-consent/backend/go-api/internal/config"
 )
@@ -30,20 +29,20 @@ type ConsentDocument struct {
 }
 
 type SearchParams struct {
-	Query   string   `json:"query"`
-	Chain   string   `json:"chain"`
-	Party   string   `json:"party"`
-	Scope   string   `json:"scope"`
-	Limit   int      `json:"limit"`
-	Offset  int      `json:"offset"`
+	Query  string `json:"query"`
+	Chain  string `json:"chain"`
+	Party  string `json:"party"`
+	Scope  string `json:"scope"`
+	Limit  int    `json:"limit"`
+	Offset int    `json:"offset"`
 }
 
 type Client struct {
-	conn         *grpc.ClientConn
-	points       pb.PointsClient
-	collections  pb.CollectionsClient
-	config       config.QdrantConfig
-	logger       *zerolog.Logger
+	conn        *grpc.ClientConn
+	points      pb.PointsClient
+	collections pb.CollectionsClient
+	config      config.QdrantConfig
+	logger      *zerolog.Logger
 }
 
 func NewClient(cfg config.QdrantConfig, logger *zerolog.Logger) (*Client, error) {
@@ -59,11 +58,11 @@ func NewClient(cfg config.QdrantConfig, logger *zerolog.Logger) (*Client, error)
 	}
 
 	c := &Client{
-		conn:         conn,
-		points:       pb.NewPointsClient(conn),
-		collections:  pb.NewCollectionsClient(conn),
-		config:       cfg,
-		logger:       logger,
+		conn:        conn,
+		points:      pb.NewPointsClient(conn),
+		collections: pb.NewCollectionsClient(conn),
+		config:      cfg,
+		logger:      logger,
 	}
 
 	if err := c.ensureCollection(context.Background()); err != nil {
@@ -124,29 +123,43 @@ func (c *Client) ensureCollection(ctx context.Context) error {
 	return nil
 }
 
+func stringValue(s string) *pb.Value {
+	return &pb.Value{ValueOneOf: &pb.Value_StringValue{StringValue: s}}
+}
+
+func boolValue(b bool) *pb.Value {
+	return &pb.Value{ValueOneOf: &pb.Value_BoolValue{BoolValue: b}}
+}
+
+func stringListValue(items []string) *pb.Value {
+	vals := make([]*pb.Value, len(items))
+	for i, item := range items {
+		vals[i] = stringValue(item)
+	}
+	return &pb.Value{ValueOneOf: &pb.Value_ListValue{ListValue: &pb.ListValue{Values: vals}}}
+}
+
+func makePayload(doc *ConsentDocument) map[string]*pb.Value {
+	return map[string]*pb.Value{
+		"consent_id":  stringValue(doc.ConsentID),
+		"parties":     stringListValue(doc.Parties),
+		"scopes":      stringListValue(doc.Scopes),
+		"valid_from":  stringValue(fmt.Sprintf("%d", doc.ValidFrom)),
+		"valid_until": stringValue(fmt.Sprintf("%d", doc.ValidUntil)),
+		"revoked":     boolValue(doc.Revoked),
+		"chain":       stringValue(doc.Chain),
+		"tx_hash":     stringValue(doc.TxHash),
+		"created_at":  stringValue(fmt.Sprintf("%d", doc.CreatedAt)),
+	}
+}
+
 func (c *Client) IndexConsent(ctx context.Context, doc *ConsentDocument) error {
 	ctx = c.authContext(ctx)
 
-	payloadMap := map[string]interface{}{
-		"consent_id":  doc.ConsentID,
-		"parties":     doc.Parties,
-		"scopes":      doc.Scopes,
-		"valid_from":  fmt.Sprintf("%d", doc.ValidFrom),
-		"valid_until": fmt.Sprintf("%d", doc.ValidUntil),
-		"revoked":     doc.Revoked,
-		"chain":       doc.Chain,
-		"tx_hash":     doc.TxHash,
-		"created_at":  fmt.Sprintf("%d", doc.CreatedAt),
-	}
-
-	payload, err := structpb.NewStruct(payloadMap)
-	if err != nil {
-		return fmt.Errorf("failed to create payload struct: %w", err)
-	}
-
+	payload := makePayload(doc)
 	pointID := uuid.New().String()
 
-	_, err = c.points.Upsert(ctx, &pb.UpsertPoints{
+	_, err := c.points.Upsert(ctx, &pb.UpsertPoints{
 		CollectionName: c.config.CollectionName,
 		Points: []*pb.PointStruct{
 			{
@@ -172,11 +185,8 @@ func (c *Client) UpdateConsentRevoked(ctx context.Context, consentID string, rev
 	}
 
 	for _, p := range points {
-		payload, err := structpb.NewStruct(map[string]interface{}{
-			"revoked": revoked,
-		})
-		if err != nil {
-			return fmt.Errorf("failed to create payload: %w", err)
+		payload := map[string]*pb.Value{
+			"revoked": boolValue(revoked),
 		}
 
 		_, err = c.points.SetPayload(ctx, &pb.SetPayloadPoints{
@@ -195,7 +205,6 @@ func (c *Client) UpdateConsentRevoked(ctx context.Context, consentID string, rev
 func (c *Client) findByConsentID(ctx context.Context, consentID string) ([]*pb.RetrievedPoint, error) {
 	ctx = c.authContext(ctx)
 
-	filterVal := structpb.NewStringValue(consentID)
 	filter := &pb.Filter{
 		Must: []*pb.Condition{
 			{
@@ -203,9 +212,7 @@ func (c *Client) findByConsentID(ctx context.Context, consentID string) ([]*pb.R
 					Field: &pb.FieldCondition{
 						Key: "consent_id",
 						Match: &pb.Match{
-							MatchValue: &pb.Match_Text{
-								Text: filterVal.GetStringValue(),
-							},
+							MatchValue: &pb.Match_Text{Text: consentID},
 						},
 					},
 				},
@@ -213,10 +220,11 @@ func (c *Client) findByConsentID(ctx context.Context, consentID string) ([]*pb.R
 		},
 	}
 
+	limit := uint32(100)
 	resp, err := c.points.Scroll(ctx, &pb.ScrollPoints{
 		CollectionName: c.config.CollectionName,
 		Filter:         filter,
-		Limit:          100,
+		Limit:          &limit,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to scroll points: %w", err)

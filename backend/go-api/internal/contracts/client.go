@@ -211,7 +211,6 @@ func encodeRegisterConsent(parties []common.Address, scopes [][32]byte, duration
 	data = append(data, sig...)
 
 	dynOffset := uint64(32 + 32 + 32)
-	offset := uint64(len(data))
 
 	partiesOffset := make([]byte, 32)
 	big.NewInt(int64(dynOffset)).FillBytes(partiesOffset)
