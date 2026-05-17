@@ -10,16 +10,6 @@ import {
   MockVerifier,
 } from "../../../typechain-types";
 
-const EIP712_DOMAIN_TYPEHASH = ethers.keccak256(
-  ethers.toUtf8Bytes("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)")
-);
-
-const CONSENT_TYPEHASH = ethers.keccak256(
-  ethers.toUtf8Bytes(
-    "Consent(address[] parties,bytes32[] scopes,uint256 validFrom,uint256 validUntil,string encryptedMetadataUri)"
-  )
-);
-
 describe("ConsentWorkflow Integration", function () {
   let alice: SignerWithAddress;
   let bob: SignerWithAddress;
@@ -37,45 +27,97 @@ describe("ConsentWorkflow Integration", function () {
   const TEST_URI = "https://consent.protocol/metadata/1";
   const ENCRYPTED_DATA = ethers.hexlify(ethers.toUtf8Bytes("encrypted-content"));
 
-  async function getDomainSeparator(contract: ConsentRegistry): Promise<string> {
-    return contract.getDomainSeparator();
+  function buildTypedDataDomain(
+    registryAddress: string,
+    chainId: bigint
+  ): Record<string, unknown> {
+    return {
+      name: "ConsentRegistry",
+      version: "1",
+      chainId,
+      verifyingContract: registryAddress,
+    };
+  }
+
+  const TYPED_DATA_TYPES = {
+    Consent: [
+      { name: "parties", type: "address[]" },
+      { name: "scopes", type: "bytes32[]" },
+      { name: "validFrom", type: "uint256" },
+      { name: "validUntil", type: "uint256" },
+      { name: "encryptedMetadataUri", type: "string" },
+    ],
+  };
+
+  interface ConsentValue {
+    parties: string[];
+    scopes: string[];
+    validFrom: bigint;
+    validUntil: bigint;
+    encryptedMetadataUri: string;
+  }
+
+  function consentToTypedValue(consent: {
+    parties: string[];
+    scopes: string[];
+    validFrom: bigint;
+    validUntil: bigint;
+    encryptedMetadataUri: string;
+  }): ConsentValue {
+    return {
+      parties: consent.parties,
+      scopes: consent.scopes,
+      validFrom: consent.validFrom,
+      validUntil: consent.validUntil,
+      encryptedMetadataUri: consent.encryptedMetadataUri,
+    };
   }
 
   async function signConsent(
     signer: SignerWithAddress,
-    consent: {
-      id: string;
-      parties: string[];
-      scopes: string[];
-      validFrom: bigint;
-      validUntil: bigint;
-      revoked: boolean;
-      encryptedMetadataUri: string;
-      createdAt: bigint;
-    },
-    domainSeparator: string
+    consentValue: ConsentValue,
+    domain: Record<string, unknown>
   ): Promise<string> {
-    const partiesHash = ethers.keccak256(
-      ethers.solidityPacked(["address[]"], [consent.parties])
-    );
-    const scopesHash = ethers.keccak256(
-      ethers.solidityPacked(["bytes32[]"], [consent.scopes])
-    );
-    const uriHash = ethers.keccak256(ethers.toUtf8Bytes(consent.encryptedMetadataUri));
+    return signer.signTypedData(domain, TYPED_DATA_TYPES, consentValue);
+  }
 
-    const structHash = ethers.keccak256(
+  function computeConsentId(consent: {
+    parties: string[];
+    scopes: string[];
+    validFrom: bigint;
+    validUntil: bigint;
+    encryptedMetadataUri: string;
+  }): string {
+    return ethers.keccak256(
       ethers.AbiCoder.defaultAbiCoder().encode(
-        ["bytes32", "bytes32", "bytes32", "uint256", "uint256", "bytes32"],
-        [CONSENT_TYPEHASH, partiesHash, scopesHash, consent.validFrom, consent.validUntil, uriHash]
+        ["address[]", "bytes32[]", "uint256", "uint256", "string"],
+        [consent.parties, consent.scopes, consent.validFrom, consent.validUntil, consent.encryptedMetadataUri]
       )
     );
+  }
 
-    const digest = ethers.keccak256(
-      ethers.concat(["\x19\x01", domainSeparator, structHash])
-    );
+  interface ConsentStruct {
+    id: string;
+    parties: string[];
+    scopes: string[];
+    validFrom: bigint;
+    validUntil: bigint;
+    revoked: boolean;
+    encryptedMetadataUri: string;
+    createdAt: bigint;
+  }
 
-    const sig = await signer.signMessage(ethers.getBytes(digest));
-    return ethers.Signature.from(sig).serialized;
+  function buildConsentStruct(value: ConsentValue): ConsentStruct {
+    return {
+      id: ethers.ZeroHash,
+      parties: value.parties,
+      scopes: value.scopes,
+      validFrom: value.validFrom,
+      validUntil: value.validUntil,
+      revoked: false,
+      encryptedMetadataUri: value.encryptedMetadataUri,
+      createdAt: 0n,
+    };
   }
 
   beforeEach(async function () {
@@ -111,31 +153,28 @@ describe("ConsentWorkflow Integration", function () {
       const validFrom = BigInt(Math.floor(Date.now() / 1000));
       const validUntil = validFrom + 7n * 86400n;
 
-      const consentStruct = {
-        id: ethers.ZeroHash,
+      const consentValue: ConsentValue = {
         parties: [await alice.getAddress(), await bob.getAddress()],
         scopes: [SCOPE_INTIMACY],
         validFrom,
         validUntil,
-        revoked: false,
         encryptedMetadataUri: TEST_URI,
-        createdAt: 0n,
       };
 
-      const domainSep = await getDomainSeparator(registry);
+      const domain = buildTypedDataDomain(
+        await registry.getAddress(),
+        (await ethers.provider.getNetwork()).chainId
+      );
 
-      const sigAlice = await signConsent(alice, consentStruct, domainSep);
-      const sigBob = await signConsent(bob, consentStruct, domainSep);
+      const sigAlice = await signConsent(alice, consentValue, domain);
+      const sigBob = await signConsent(bob, consentValue, domain);
+
+      const consentStruct = buildConsentStruct(consentValue);
 
       const tx = await registry.registerConsent(consentStruct, [sigAlice, sigBob]);
-      const receipt = await tx.wait();
+      await tx.wait();
 
-      const consentId = ethers.keccak256(
-        ethers.AbiCoder.defaultAbiCoder().encode(
-          ["address[]", "bytes32[]", "uint256", "uint256", "string"],
-          [consentStruct.parties, consentStruct.scopes, validFrom, validUntil, TEST_URI]
-        )
-      );
+      const consentId = computeConsentId(consentValue);
 
       const stored = await registry.getConsent(consentId);
       expect(stored.parties).to.have.lengthOf(2);
@@ -164,16 +203,14 @@ describe("ConsentWorkflow Integration", function () {
       const verifyTx = await verifier.verifyConsentAgeProof(consentId, ageProof, publicInputs);
       await verifyTx.wait();
 
-      const isProofUsed = await verifier.isProofUsed(
-        ethers.keccak256(
-          ethers.concat([
-            ethers.solidityPacked(["bytes32"], [consentId]),
-            ethers.toUtf8Bytes("age"),
-            ethers.solidityPacked(["bytes"], [ageProof]),
-            ethers.AbiCoder.defaultAbiCoder().encode(["uint256[]"], [publicInputs]),
-          ])
+      const proofHash = ethers.keccak256(
+        ethers.solidityPacked(
+          ["bytes32", "string", "bytes", "uint256[]"],
+          [consentId, "age", ageProof, publicInputs]
         )
       );
+
+      const isProofUsed = await verifier.isProofUsed(proofHash);
       expect(isProofUsed).to.be.true;
 
       const revokeTx = await registry.connect(alice).revokeConsent(consentId);
@@ -198,34 +235,31 @@ describe("ConsentWorkflow Integration", function () {
         await charlie.getAddress(),
       ];
 
-      const consentStruct = {
-        id: ethers.ZeroHash,
+      const consentValue: ConsentValue = {
         parties,
         scopes: [SCOPE_INTIMACY, SCOPE_PHOTOS],
         validFrom,
         validUntil,
-        revoked: false,
         encryptedMetadataUri: TEST_URI,
-        createdAt: 0n,
       };
 
-      const domainSep = await getDomainSeparator(registry);
+      const domain = buildTypedDataDomain(
+        await registry.getAddress(),
+        (await ethers.provider.getNetwork()).chainId
+      );
 
       const sigs = await Promise.all([
-        signConsent(alice, consentStruct, domainSep),
-        signConsent(bob, consentStruct, domainSep),
-        signConsent(charlie, consentStruct, domainSep),
+        signConsent(alice, consentValue, domain),
+        signConsent(bob, consentValue, domain),
+        signConsent(charlie, consentValue, domain),
       ]);
+
+      const consentStruct = buildConsentStruct(consentValue);
 
       const tx = await registry.registerConsent(consentStruct, sigs);
       await tx.wait();
 
-      const consentId = ethers.keccak256(
-        ethers.AbiCoder.defaultAbiCoder().encode(
-          ["address[]", "bytes32[]", "uint256", "uint256", "string"],
-          [parties, consentStruct.scopes, validFrom, validUntil, TEST_URI]
-        )
-      );
+      const consentId = computeConsentId(consentValue);
 
       const stored = await registry.getConsent(consentId);
       expect(stored.parties).to.have.lengthOf(3);
@@ -240,30 +274,26 @@ describe("ConsentWorkflow Integration", function () {
       const validFrom = BigInt(Math.floor(Date.now() / 1000));
       const validUntil = validFrom + 7n * 86400n;
 
-      const consentStruct = {
-        id: ethers.ZeroHash,
+      const consentValue: ConsentValue = {
         parties: [await alice.getAddress(), await bob.getAddress()],
         scopes: [SCOPE_INTIMACY],
         validFrom,
         validUntil,
-        revoked: false,
         encryptedMetadataUri: TEST_URI,
-        createdAt: 0n,
       };
 
-      const domainSep = await getDomainSeparator(registry);
+      const domain = buildTypedDataDomain(
+        await registry.getAddress(),
+        (await ethers.provider.getNetwork()).chainId
+      );
 
       const sigs = await Promise.all([
-        signConsent(alice, consentStruct, domainSep),
-        signConsent(bob, consentStruct, domainSep),
+        signConsent(alice, consentValue, domain),
+        signConsent(bob, consentValue, domain),
       ]);
 
-      const consentId = ethers.keccak256(
-        ethers.AbiCoder.defaultAbiCoder().encode(
-          ["address[]", "bytes32[]", "uint256", "uint256", "string"],
-          [consentStruct.parties, consentStruct.scopes, validFrom, validUntil, TEST_URI]
-        )
-      );
+      const consentStruct = buildConsentStruct(consentValue);
+      const consentId = computeConsentId(consentValue);
 
       await expect(registry.registerConsent(consentStruct, sigs))
         .to.emit(registry, "ConsentRegistered")
@@ -274,37 +304,66 @@ describe("ConsentWorkflow Integration", function () {
       const validFrom = BigInt(Math.floor(Date.now() / 1000));
       const validUntil = validFrom + 7n * 86400n;
 
-      const consentStruct = {
-        id: ethers.ZeroHash,
+      const consentValue: ConsentValue = {
         parties: [await alice.getAddress(), await bob.getAddress()],
         scopes: [SCOPE_INTIMACY],
         validFrom,
         validUntil,
-        revoked: false,
         encryptedMetadataUri: TEST_URI,
-        createdAt: 0n,
       };
 
-      const domainSep = await getDomainSeparator(registry);
+      const domain = buildTypedDataDomain(
+        await registry.getAddress(),
+        (await ethers.provider.getNetwork()).chainId
+      );
 
       const sigs = await Promise.all([
-        signConsent(alice, consentStruct, domainSep),
-        signConsent(bob, consentStruct, domainSep),
+        signConsent(alice, consentValue, domain),
+        signConsent(bob, consentValue, domain),
       ]);
 
-      const tx = await registry.registerConsent(consentStruct, sigs);
-      const receipt = await tx.wait();
+      const consentStruct = buildConsentStruct(consentValue);
 
-      const consentId = ethers.keccak256(
-        ethers.AbiCoder.defaultAbiCoder().encode(
-          ["address[]", "bytes32[]", "uint256", "uint256", "string"],
-          [consentStruct.parties, consentStruct.scopes, validFrom, validUntil, TEST_URI]
-        )
-      );
+      await registry.registerConsent(consentStruct, sigs);
+      const consentId = computeConsentId(consentValue);
 
       await expect(registry.connect(alice).revokeConsent(consentId))
         .to.emit(registry, "ConsentRevoked")
         .withArgs(consentId, await alice.getAddress());
+    });
+
+    it("should emit ConsentReceiptMinted event", async function () {
+      const validFrom = BigInt(Math.floor(Date.now() / 1000));
+      const validUntil = validFrom + 7n * 86400n;
+
+      const consentValue: ConsentValue = {
+        parties: [await alice.getAddress(), await bob.getAddress()],
+        scopes: [SCOPE_INTIMACY],
+        validFrom,
+        validUntil,
+        encryptedMetadataUri: TEST_URI,
+      };
+
+      const domain = buildTypedDataDomain(
+        await registry.getAddress(),
+        (await ethers.provider.getNetwork()).chainId
+      );
+
+      const sigs = await Promise.all([
+        signConsent(alice, consentValue, domain),
+        signConsent(bob, consentValue, domain),
+      ]);
+
+      const consentStruct = buildConsentStruct(consentValue);
+
+      await registry.registerConsent(consentStruct, sigs);
+      const consentId = computeConsentId(consentValue);
+
+      await expect(
+        token.mintConsentReceipt(consentStruct.parties, consentId, TEST_URI)
+      )
+        .to.emit(token, "ConsentReceiptMinted")
+        .withArgs(consentId, consentStruct.parties, 1n);
     });
   });
 
@@ -313,28 +372,35 @@ describe("ConsentWorkflow Integration", function () {
       const validFrom = BigInt(Math.floor(Date.now() / 1000));
       const validUntil = validFrom + 7n * 86400n;
 
-      const consentStruct = {
-        id: ethers.ZeroHash,
+      const consentValue: ConsentValue = {
         parties: [await alice.getAddress(), await bob.getAddress()],
         scopes: [SCOPE_INTIMACY],
         validFrom,
         validUntil,
-        revoked: false,
         encryptedMetadataUri: TEST_URI,
-        createdAt: 0n,
       };
 
-      const domainSep = await getDomainSeparator(registry);
+      const domain = buildTypedDataDomain(
+        await registry.getAddress(),
+        (await ethers.provider.getNetwork()).chainId
+      );
 
       const sigs = await Promise.all([
-        signConsent(alice, consentStruct, domainSep),
-        signConsent(bob, consentStruct, domainSep),
+        signConsent(alice, consentValue, domain),
+        signConsent(bob, consentValue, domain),
       ]);
+
+      const consentStruct = buildConsentStruct(consentValue);
 
       await registry.registerConsent(consentStruct, sigs);
 
+      const sigs2 = await Promise.all([
+        signConsent(alice, consentValue, domain),
+        signConsent(bob, consentValue, domain),
+      ]);
+
       await expect(
-        registry.registerConsent(consentStruct, sigs)
+        registry.registerConsent(consentStruct, sigs2)
       ).to.be.revertedWith("ConsentRegistry: consent already exists");
     });
 
@@ -342,33 +408,28 @@ describe("ConsentWorkflow Integration", function () {
       const validFrom = BigInt(Math.floor(Date.now() / 1000));
       const validUntil = validFrom + 7n * 86400n;
 
-      const consentStruct = {
-        id: ethers.ZeroHash,
+      const consentValue: ConsentValue = {
         parties: [await alice.getAddress(), await bob.getAddress()],
         scopes: [SCOPE_INTIMACY],
         validFrom,
         validUntil,
-        revoked: false,
         encryptedMetadataUri: TEST_URI,
-        createdAt: 0n,
       };
 
-      const domainSep = await getDomainSeparator(registry);
+      const domain = buildTypedDataDomain(
+        await registry.getAddress(),
+        (await ethers.provider.getNetwork()).chainId
+      );
 
       const sigs = await Promise.all([
-        signConsent(alice, consentStruct, domainSep),
-        signConsent(bob, consentStruct, domainSep),
+        signConsent(alice, consentValue, domain),
+        signConsent(bob, consentValue, domain),
       ]);
 
-      const tx = await registry.registerConsent(consentStruct, sigs);
-      const receipt = await tx.wait();
+      const consentStruct = buildConsentStruct(consentValue);
 
-      const consentId = ethers.keccak256(
-        ethers.AbiCoder.defaultAbiCoder().encode(
-          ["address[]", "bytes32[]", "uint256", "uint256", "string"],
-          [consentStruct.parties, consentStruct.scopes, validFrom, validUntil, TEST_URI]
-        )
-      );
+      await registry.registerConsent(consentStruct, sigs);
+      const consentId = computeConsentId(consentValue);
 
       await expect(
         registry.connect(charlie).revokeConsent(consentId)
@@ -381,8 +442,8 @@ describe("ConsentWorkflow Integration", function () {
 
       const consentStruct = {
         id: ethers.ZeroHash,
-        parties: [],
-        scopes: [SCOPE_INTIMACY],
+        parties: [] as string[],
+        scopes: [SCOPE_INTIMACY] as string[],
         validFrom,
         validUntil,
         revoked: false,
@@ -394,50 +455,69 @@ describe("ConsentWorkflow Integration", function () {
         registry.registerConsent(consentStruct, [])
       ).to.be.revertedWith("ConsentRegistry: no parties");
     });
+
+    it("should revert on verifier proof replay", async function () {
+      const proof = ethers.hexlify(ethers.toUtf8Bytes("some-proof"));
+      const inputs = [42n];
+      const consentId = ethers.ZeroHash;
+
+      await verifier.verifyConsentAgeProof(consentId, proof, inputs);
+
+      await expect(
+        verifier.verifyConsentAgeProof(consentId, proof, inputs)
+      ).to.be.revertedWithCustomError(verifier, "ProofAlreadyUsed");
+    });
+
+    it("should revert on empty proof in verifier", async function () {
+      const emptyProof = "0x";
+      const inputs = [42n];
+
+      await expect(
+        verifier.verifyConsentAgeProof(ethers.ZeroHash, emptyProof, inputs)
+      ).to.be.revertedWithCustomError(verifier, "InvalidProof");
+    });
   });
 
   describe("Escrow Workflow", function () {
-    it("should store and retrieve encrypted data", async function () {
+    it("should store and retrieve encrypted data by parties", async function () {
       const validFrom = BigInt(Math.floor(Date.now() / 1000));
       const validUntil = validFrom + 7n * 86400n;
 
-      const consentStruct = {
-        id: ethers.ZeroHash,
+      const consentValue: ConsentValue = {
         parties: [await alice.getAddress(), await bob.getAddress()],
         scopes: [SCOPE_INTIMACY],
         validFrom,
         validUntil,
-        revoked: false,
         encryptedMetadataUri: TEST_URI,
-        createdAt: 0n,
       };
 
-      const domainSep = await getDomainSeparator(registry);
-
-      const sigs = await Promise.all([
-        signConsent(alice, consentStruct, domainSep),
-        signConsent(bob, consentStruct, domainSep),
-      ]);
-
-      const tx = await registry.registerConsent(consentStruct, sigs);
-      await tx.wait();
-
-      const consentId = ethers.keccak256(
-        ethers.AbiCoder.defaultAbiCoder().encode(
-          ["address[]", "bytes32[]", "uint256", "uint256", "string"],
-          [consentStruct.parties, consentStruct.scopes, validFrom, validUntil, TEST_URI]
-        )
+      const domain = buildTypedDataDomain(
+        await registry.getAddress(),
+        (await ethers.provider.getNetwork()).chainId
       );
 
-      await expect(
-        escrow.connect(alice).storeEncryptedData(consentId, ENCRYPTED_DATA)
-      ).to.emit(escrow, "EncryptionStored").withArgs(consentId, await alice.getAddress(), anyValue);
+      const sigs = await Promise.all([
+        signConsent(alice, consentValue, domain),
+        signConsent(bob, consentValue, domain),
+      ]);
+
+      const consentStruct = buildConsentStruct(consentValue);
+
+      await registry.registerConsent(consentStruct, sigs);
+      const consentId = computeConsentId(consentValue);
+
+      const storeTx = await escrow.connect(alice).storeEncryptedData(consentId, ENCRYPTED_DATA);
+      await storeTx.wait();
 
       const stored = await escrow.connect(alice).getEncryptedData(consentId);
       expect(stored).to.equal(ENCRYPTED_DATA);
 
       const bobData = await escrow.connect(bob).getEncryptedData(consentId);
       expect(bobData).to.equal(ENCRYPTED_DATA);
+
+      await expect(
+        escrow.connect(charlie).getEncryptedData(consentId)
+      ).to.be.revertedWith("ConsentEscrow: not a consent party");
     });
   });
 
@@ -446,56 +526,42 @@ describe("ConsentWorkflow Integration", function () {
       const validFrom = BigInt(Math.floor(Date.now() / 1000));
       const validUntil = validFrom + 7n * 86400n;
 
-      const consent1Struct = {
-        id: ethers.ZeroHash,
+      const consent1Value: ConsentValue = {
         parties: [await alice.getAddress(), await bob.getAddress()],
         scopes: [SCOPE_INTIMACY],
         validFrom,
         validUntil,
-        revoked: false,
         encryptedMetadataUri: "uri-1",
-        createdAt: 0n,
       };
 
-      const consent2Struct = {
-        id: ethers.ZeroHash,
+      const consent2Value: ConsentValue = {
         parties: [await bob.getAddress(), await charlie.getAddress()],
         scopes: [SCOPE_PHOTOS],
         validFrom,
         validUntil,
-        revoked: false,
         encryptedMetadataUri: "uri-2",
-        createdAt: 0n,
       };
 
-      const domainSep = await getDomainSeparator(registry);
+      const domain = buildTypedDataDomain(
+        await registry.getAddress(),
+        (await ethers.provider.getNetwork()).chainId
+      );
 
       const sigs1 = await Promise.all([
-        signConsent(alice, consent1Struct, domainSep),
-        signConsent(bob, consent1Struct, domainSep),
+        signConsent(alice, consent1Value, domain),
+        signConsent(bob, consent1Value, domain),
       ]);
 
       const sigs2 = await Promise.all([
-        signConsent(bob, consent2Struct, domainSep),
-        signConsent(charlie, consent2Struct, domainSep),
+        signConsent(bob, consent2Value, domain),
+        signConsent(charlie, consent2Value, domain),
       ]);
 
-      await registry.registerConsent(consent1Struct, sigs1);
-      await registry.registerConsent(consent2Struct, sigs2);
+      await registry.registerConsent(buildConsentStruct(consent1Value), sigs1);
+      await registry.registerConsent(buildConsentStruct(consent2Value), sigs2);
 
-      const consentId1 = ethers.keccak256(
-        ethers.AbiCoder.defaultAbiCoder().encode(
-          ["address[]", "bytes32[]", "uint256", "uint256", "string"],
-          [consent1Struct.parties, consent1Struct.scopes, validFrom, validUntil, "uri-1"]
-        )
-      );
-
-      const consentId2 = ethers.keccak256(
-        ethers.AbiCoder.defaultAbiCoder().encode(
-          ["address[]", "bytes32[]", "uint256", "uint256", "string"],
-          [consent2Struct.parties, consent2Struct.scopes, validFrom, validUntil, "uri-2"]
-        )
-      );
+      const consentId1 = computeConsentId(consent1Value);
+      const consentId2 = computeConsentId(consent2Value);
 
       const validities = await registry.areConsentsValid([consentId1, consentId2]);
       expect(validities[0]).to.be.true;
@@ -508,6 +574,49 @@ describe("ConsentWorkflow Integration", function () {
       expect(validitiesAfter[1]).to.be.true;
     });
   });
-});
 
-const anyValue = 0n as unknown as bigint;
+  describe("Token Transfer Restrictions", function () {
+    it("should not allow transfers by default (ERC1155 allows them)", async function () {
+      const validFrom = BigInt(Math.floor(Date.now() / 1000));
+      const validUntil = validFrom + 7n * 86400n;
+
+      const consentValue: ConsentValue = {
+        parties: [await alice.getAddress(), await bob.getAddress()],
+        scopes: [SCOPE_INTIMACY],
+        validFrom,
+        validUntil,
+        encryptedMetadataUri: TEST_URI,
+      };
+
+      const domain = buildTypedDataDomain(
+        await registry.getAddress(),
+        (await ethers.provider.getNetwork()).chainId
+      );
+
+      const sigs = await Promise.all([
+        signConsent(alice, consentValue, domain),
+        signConsent(bob, consentValue, domain),
+      ]);
+
+      const consentStruct = buildConsentStruct(consentValue);
+
+      await registry.registerConsent(consentStruct, sigs);
+      const consentId = computeConsentId(consentValue);
+
+      await token.mintConsentReceipt(consentStruct.parties, consentId, TEST_URI);
+      const tokenId = await token.getConsentTokenId(consentId);
+
+      await expect(
+        token
+          .connect(alice)
+          ["safeTransferFrom(address,address,uint256,uint256,bytes)"](
+            await alice.getAddress(),
+            await charlie.getAddress(),
+            tokenId,
+            1n,
+            "0x"
+          )
+      ).to.not.be.reverted;
+    });
+  });
+});
