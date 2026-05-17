@@ -60,7 +60,7 @@ func (h *Handler) CreateConsent(c *gin.Context) {
 	scopeBytes := scopesToBytes32(req.Scopes)
 	duration := bigIntPtr(req.Duration)
 
-	txHash, txHashStr, err := contractCli.RegisterConsent(c.Request.Context(), parties, scopeBytes, duration)
+	_, txHashStr, err := contractCli.RegisterConsent(c.Request.Context(), parties, scopeBytes, duration)
 	if err != nil {
 		if !strings.Contains(err.Error(), "requires external signing") {
 			h.handleError(c, http.StatusInternalServerError, "failed to register consent on chain", err)
