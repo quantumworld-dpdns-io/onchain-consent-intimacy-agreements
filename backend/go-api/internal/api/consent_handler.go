@@ -622,4 +622,3 @@ func (h *Handler) verifyZKProof(req VerifyConsentRequest) (bool, error) {
 	return result.Valid, nil
 }
 
-var _ = crypto.Keccak256Hash
