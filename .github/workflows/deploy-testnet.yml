@@ -1,0 +1,64 @@
+name: Deploy Testnet
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/contracts/**'
+      - 'scripts/deploy/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: testnet
+    strategy:
+      matrix:
+        chain: [sepolia, bsc-testnet, amoy, palm-testnet, base-sepolia]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Deploy to ${{ matrix.chain }}
+        id: deploy
+        run: |
+          npx hardhat run scripts/deploy/${{ matrix.chain }}.ts --network ${{ matrix.chain }}
+        env:
+          DEPLOYER_PRIVATE_KEY: ${{ secrets.DEPLOYER_PRIVATE_KEY }}
+          SEPOLIA_RPC_URL: ${{ secrets.SEPOLIA_RPC_URL }}
+
+      - name: Verify contracts
+        run: |
+          npx hardhat verify --network ${{ matrix.chain }} ${{ steps.deploy.outputs.registry_address }}
+
+      - name: Update deployment manifest
+        run: |
+          echo "Deployed to ${{ matrix.chain }} at $(date)" >> deployment-manifest.md
+
+      - name: Notify
+        run: |
+          echo "Deployed to ${{ matrix.chain }} successfully"
+
+  deploy-solana:
+    needs: [deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Deploy Solana programs
+        run: |
+          cd solana-programs
+          anchor deploy --provider.cluster devnet
+
+  update-registry:
+    needs: [deploy, deploy-solana]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Update on-chain address registry"
