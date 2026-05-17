@@ -149,6 +149,10 @@ func scopesToBytes32(scopes []string) [][32]byte {
 	return result
 }
 
+func (h *Handler) CloseChainClients() {
+	h.chainMgr.CloseAll()
+}
+
 func removeZeroBytes(s string) string {
 	return strings.TrimRight(s, "\x00")
 }

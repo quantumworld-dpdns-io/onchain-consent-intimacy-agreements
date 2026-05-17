@@ -103,5 +103,7 @@ func main() {
 		redisClient.Close()
 	}
 
+	handler.CloseChainClients()
+
 	logger.Info().Msg("server stopped")
 }
