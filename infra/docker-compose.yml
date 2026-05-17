@@ -1,0 +1,167 @@
+version: "3.8"
+
+services:
+  anvil:
+    image: ghcr.io/foundry-rs/foundry:latest
+    command: anvil --host 0.0.0.0 --port 8545 --block-time 1
+    ports:
+      - "8545:8545"
+    networks:
+      - consent-network
+
+  solana-test-validator:
+    image: solanalabs/solana:stable
+    command: solana-test-validator --host 0.0.0.0
+    ports:
+      - "8899:8899"
+      - "8900:8900"
+    networks:
+      - consent-network
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+      - ./qdrant/config.yaml:/qdrant/config.yaml
+    environment:
+      QDRANT__SERVICE__GRPC_PORT: "6334"
+    networks:
+      - consent-network
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    networks:
+      - consent-network
+
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: consent
+      POSTGRES_PASSWORD: consent_pass
+      POSTGRES_DB: consent_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - consent-network
+
+  go-api:
+    build:
+      context: ../backend/go-api
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+    environment:
+      LISTEN_ADDR: ":8080"
+      MCP_PORT: "8081"
+      QDRANT_URL: http://qdrant:6333
+      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://consent:consent_pass@postgres:5432/consent_db?sslmode=disable
+      RUST_ZK_URL: http://rust-zk-service:3000
+      ANVIL_RPC: http://anvil:8545
+      LOG_LEVEL: debug
+    depends_on:
+      qdrant:
+        condition: service_started
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_started
+      anvil:
+        condition: service_started
+    networks:
+      - consent-network
+
+  rust-zk-service:
+    build:
+      context: ../circuits/rust-zk-service
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      RUST_LOG: info
+      HOST: 0.0.0.0
+      PORT: 3000
+    volumes:
+      - ../circuits/noir:/app/circuits/noir
+    networks:
+      - consent-network
+
+  event-indexer:
+    build:
+      context: ../backend/event-indexer
+      dockerfile: Dockerfile
+    environment:
+      QDRANT_URL: http://qdrant:6333
+      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://consent:consent_pass@postgres:5432/consent_db?sslmode=disable
+      ANVIL_RPC: http://anvil:8545
+      SOLANA_RPC: http://solana-test-validator:8899
+    depends_on:
+      qdrant:
+        condition: service_started
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_started
+      anvil:
+        condition: service_started
+    networks:
+      - consent-network
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+    depends_on:
+      - go-api
+    networks:
+      - consent-network
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    networks:
+      - consent-network
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_INSTALL_PLUGINS: grafana-piechart-panel
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana-dashboards:/etc/grafana/provisioning/dashboards
+    depends_on:
+      - prometheus
+    networks:
+      - consent-network
+
+volumes:
+  qdrant_storage:
+  redis_data:
+  postgres_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  consent-network:
+    driver: bridge

@@ -1,0 +1,22 @@
+storage:
+  storage_path: ./qdrant_storage
+  optimizers:
+    default_segment_number: 2
+    memmap_threshold_kb: 20000
+    indexing_threshold: 50000
+    flush_interval_sec: 5
+    max_optimization_threads: 2
+  wal:
+    wal_capacity_mb: 32
+    wal_segments_ahead: 0
+
+service:
+  grpc_port: 6334
+  http_port: 6333
+  max_request_size_mb: 64
+  max_workers: 8
+  enable_tls: false
+
+telemetry_disabled: true
+
+log_level: INFO
