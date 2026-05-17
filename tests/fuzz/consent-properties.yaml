@@ -1,0 +1,60 @@
+# Echidna fuzz configuration for ConsentRegistry
+# See: https://github.com/crytic/echidna
+
+# Test configuration
+testLimit: 100000
+contractAddr: "0x00a329c0648769a73afac7f9381e08fb43dbea72"
+deployer: "0x1000000000000000000000000000000000000000"
+sender: ["0x2000000000000000000000000000000000000000"]
+coverage: true
+shrinkLimit: 5000
+seqLen: 100
+testMode: assertion
+
+# Test deployment
+balanceAddr: 0xFFFFFFFFFFFFFFFF
+balanceContract: 0xFFFFFFFFFFFFFFFF
+
+# Gas configuration
+gasLimit: 0x1FFFFFFFFF
+gasPrice: 0x01
+
+# Filter configuration
+filterBlacklist: false
+filterFunctions: ["registerConsent(bytes32,(address[],bytes32[],uint256,uint256,bool,string,uint256),bytes[])"]
+
+# Code size
+codeSize: 0xFFFFFFFF
+
+# Timeout
+timeout: 3600
+
+# Property testing configuration
+properties:
+  - "echidna_test_consent_registration"
+  - "echidna_test_consent_revocation"
+  - "echidna_test_consent_validity"
+  - "echidna_test_unauthorized_revocation"
+  - "echidna_test_signature_replay"
+  - "echidna_test_consent_immutability"
+
+# Sequence configuration
+seqLen: 100
+shrinkLimit: 5000
+
+# Test modes
+testMode: assertion
+
+# Coverage
+coverage: true
+corpusDir: "corpus"
+coverageFormats:
+  - "lcov"
+  - "html"
+
+# RPC configuration (for testing against fork)
+# rpcUrl: "http://localhost:8545"
+# rpcBlock: -1
+
+# Dictionary for fuzzer
+dictFreq: 0.4
